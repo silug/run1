@@ -10,7 +10,7 @@
 #
 ####
 #
-# Copyright (C) 2001 Steven Pritchard <steve@silug.org>
+# Copyright (C) 2001-2002 Steven Pritchard <steve@silug.org>
 # This program is free software; you can redistribute it
 # and/or modify it under the same terms as Perl itself.
 #
@@ -18,7 +18,7 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
-# $Id: run1,v 1.7 2002/07/23 13:48:28 steve Exp $
+# $Id: run1,v 1.8 2002/07/30 21:29:30 steve Exp $
 
 use strict;
 
@@ -28,49 +28,51 @@ use Fcntl qw(:flock);
 use POSIX;# qw(pause :sys_wait_h :errno_h);
 
 use vars qw(%opt $break $debug);
-use vars qw($warntime $killtime $lockdir $label $lockfile $lfh $count);
+use vars qw($warntime $killtime $lockdir $label $lockfile $lfh $count $shared);
 
 sub debug(@);
 sub basename($);
+sub open_and_lock($$);
 
-getopts('d:l:w:k:', \%opt);
+getopts('d:l:w:k:s', \%opt);
 
-if (!@ARGV)
-{
+if (!@ARGV) {
     print STDERR "usage: " . basename($0) . " <args> [ <arguments> ]\n";
     exit 0;
 }
 
-$debug=0;
-$debug=1 if (defined($ENV{'DEBUG'}));
+if (defined($ENV{'DEBUG'})) {
+    $debug=1;
+} else {
+    $debug=0;
+}
 
 $break=0;
 
-if (defined($opt{'w'}))
-{
+if (defined($opt{'w'})) {
     $warntime=$opt{'w'};
-}
-else
-{
+} else {
     $warntime=86400; # One day.
 }
 
-if (defined($opt{'k'}))
-{
+if (defined($opt{'k'})) {
     $killtime=$opt{'k'};
-}
-else
-{
+} else {
     $killtime=0; # Never
 }
 
 $lockdir=$opt{'d'} || (getpwuid($<))[7] . "/.locks";
 
-if (!-d $lockdir)
-{
+if (!-d $lockdir) {
     mkdir $lockdir, 0755;
     my $status=$!;
     die "Failed to create $lockdir: $status\n" if (!-d $lockdir);
+}
+
+if (defined($opt{'s'})) {
+    $shared=1;
+} else {
+    $shared=0;
 }
 
 $label=basename($opt{'l'}) || basename($ARGV[0]);
@@ -80,83 +82,7 @@ $lockfile="$lockdir/$label";
 
 $count=0;
 
-TRY: $lfh=new FileHandle $lockfile, O_CREAT|O_WRONLY|O_EXCL;
-
-if (!defined($lfh))
-{
-    if ($!==EEXIST)
-    {
-	# Either a process is running, or there is a stale pid/lock file.
-	$lfh=new FileHandle $lockfile, O_RDWR;
-	if (!defined($lfh))
-	{
-	    if ($!==ENOENT)
-	    {
-		# The other process probably already exited.
-		goto TRY;
-	    }
-	    else
-	    {
-		die "Couldn't open lockfile $lockfile: $!\n";
-	    }
-	}
-
-	sleep 2; # Wait a bit before we try anything.
-
-	my $oldpid=<$lfh>;
-	chomp $oldpid;
-
-	if (flock($lfh, LOCK_EX|LOCK_NB))
-	{
-	    # Got the lock - pid/lock file is stale.
-	    print STDERR "Forcing stale lock from process $oldpid.\n";
-	    truncate($lfh, 0);
-	}
-	else
-	{
-	    # Couldn't get the lock - process must be running.
-	    debug "pid $oldpid seems to be running.";
-	    my @buf=stat($lfh);
-	    if ($killtime && (time>$buf[9]+$killtime))
-	    {
-		if ($count>10)
-		{
-		    print STDERR "PID $oldpid won't die!  Giving up...\n";
-		    exit 1;
-		}
-		print STDERR "killing pid $oldpid...\n";
-		if (!kill(15, $oldpid))
-		{
-		    my $status=$!;
-		    die "Couldn't kill pid $oldpid: $status\n"
-		        if (-d "/proc/$oldpid");
-		}
-		sleep(2);
-		$count++;
-		goto TRY;
-	    }
-	    elsif ($warntime && (time>$buf[9]+$warntime))
-	    {
-		print STDERR "process $oldpid has been running too long ",
-			     "(since ", scalar(localtime($buf[9])), ")\n";
-	    }
-	    else
-	    {
-	        debug "pid $oldpid seems to have started ",
-		      scalar(localtime($buf[9]));
-	    }
-	    exit 0;
-	}
-    }
-    else
-    {
-	die "Couldn't create lockfile $lockfile: $!\n";
-    }
-}
-else
-{
-    flock($lfh, LOCK_EX|LOCK_NB) or die "Failed to lock $lockfile: $!\n";
-}
+$lfh=open_and_lock($lockfile, $shared);
 
 print $lfh "$$\n";
 $lfh->flush;
@@ -170,25 +96,36 @@ $SIG{'TERM'}=\&interrupt;
 $SIG{'CHLD'}=sub { $break=0; };
 
 my $pid=fork;
-if ($pid==-1)
-{
+if ($pid==-1) {
     die "fork() failed: $!\n";
-}
-elsif ($pid==0)
-{
+} elsif ($pid==0) {
     exec @ARGV;
     die "exec() failed: $!\n";
 }
 
-while (-d "/proc/$pid")
-{
+while (kill 0, $pid) {
     POSIX::pause;
     kill($break, $pid) if ($break);
     waitpid($pid, &WNOHANG);
 }
 
-unlink $lockfile or warn "Failed to unlink $lockfile: $!\n";
+if ($shared) {
+    # Try to get an exclusive lock.  If we
+    # can, it is safe to remove the lock file.
+    if (flock($lfh, LOCK_EX|LOCK_NB)) {
+        unlink $lockfile or warn "Failed to unlink $lockfile: $!\n";
+    } else {
+        debug "Leaving active shared lock file $lockfile.\n",
+	      "flock() error was '$!'";
+    }
+} else {
+    unlink $lockfile or warn "Failed to unlink $lockfile: $!\n";
+}
 
+# We don't really care if these succeed,
+# since we're just going to exit anyway.
+flock($lfh, LOCK_UN);
+close($lfh);
 exit $?>>8;
 
 sub debug(@)
@@ -210,6 +147,102 @@ sub basename($)
     my @parts=split '/', $arg;
 
     return $parts[$#parts];
+}
+
+sub open_and_lock($$)
+{
+    my ($lockfile, $shared)=@_;
+    my $lfh;
+
+    $lfh=new FileHandle $lockfile, O_CREAT|O_WRONLY|O_EXCL;
+
+    if (!defined($lfh)) {
+        if ($!==EEXIST) {
+	    # Either a process is running, or there is a stale pid/lock file.
+	    $lfh=new FileHandle $lockfile, O_RDWR;
+	    if (!defined($lfh)) {
+	        if ($!==ENOENT) {
+		    # The other process probably already exited.
+		    return open_and_lock($lockfile, $shared);
+	        } else {
+		    die "Couldn't open lockfile $lockfile: $!\n";
+	        }
+	    }
+
+	    my @oldpids;
+
+	    while (<$lfh>) {
+		$_+=0; # Make pid numeric.  Who needs chomp()?
+	        push(@oldpids, $_);
+	    }
+
+	    if ($shared) {
+	        if (flock($lfh, LOCK_SH|LOCK_NB)) {
+		    # This sucks, because I'm not sure how we can figure
+		    # out how many processes we share the lock with, if any.
+		    debug "Got the lock, ",
+		        (@oldpids
+			    ? "possibly shared with pid(s) @oldpids."
+			    : "but the previous owner is unknown?!");
+		    seek($lfh, 0, 2); # Seek to the end of the file.
+		} else {
+		    die "Couldn't get a shared lock on $lockfile: $!\n";
+		}
+	    } elsif (flock($lfh, LOCK_EX|LOCK_NB)) {
+	        # Got the lock - pid/lock file is stale.
+	        print STDERR "Forcing stale lock",
+		    (@oldpids ? " from process(es) @oldpids" : ""), ".\n";
+	        truncate($lfh, 0);
+	    } else {
+	        # Couldn't get the lock - process must be running.
+		if (@oldpids) {
+	            debug "pid(s) @oldpids seem(s) to be running.";
+	            my @buf=stat($lfh);
+	            if ($killtime && (time>$buf[9]+$killtime)) {
+		        if ($count>10) {
+		            print STDERR
+			        "PID(s) @oldpids won't die!  Giving up...\n";
+		            exit 1;
+		        }
+			for my $oldpid (@oldpids) {
+			    next if (!kill(0, $oldpid));
+
+			    debug "$oldpid is apparently still running.";
+		            print STDERR "killing pid $oldpid...\n";
+		            die "Couldn't send TERM signal to pid $oldpid: $!\n"
+		                if (!kill(15, $oldpid));
+			}
+		        sleep(2);
+		        $count++;
+		        return open_and_lock($lockfile, $shared);
+	            } elsif ($warntime && (time>$buf[9]+$warntime)) {
+		        print STDERR
+			    "process(es) @oldpids have been running too long ",
+			    "(since at least ",
+			    scalar(localtime($buf[9])), ")\n";
+	            } else {
+	                debug "pid(s) @oldpids seem(s) to have started ",
+		              scalar(localtime($buf[9])), ", maybe earlier";
+	            }
+		} else {
+		    warn "lock $lockfile exists, but the owner is unknown!\n";
+		}
+	        exit 0;
+	    }
+        } else {
+	    die "Couldn't create lockfile $lockfile: $!\n";
+        }
+    } else {
+	if ($shared) {
+            flock($lfh, LOCK_SH|LOCK_NB)
+	        or die "Failed to lock $lockfile: $!\n";
+	} else {
+            flock($lfh, LOCK_EX|LOCK_NB)
+	        or die "Failed to lock $lockfile: $!\n";
+	}
+    }
+
+    return $lfh;
 }
 
 __END__
@@ -251,6 +284,28 @@ Specifying 0 seconds disables warning messages.
 
 Kill the process with the lock if it has been running for more than I<seconds>
 seconds.  The default is 0, which disables this feature.
+
+=item C<-s>
+
+Try to get a shared lock on the lock file.  This is useful for nesting
+calls to run1.  Say you have two scripts that can operate independently,
+and another script that does the equivalent of the first two, in addition
+to whatever other work it might do.  For example, a script that mirrors a
+linux distribution ftp site.  One syncs only updates, the second syncs only
+the distribution, and a third syncs the whole tree.  You might invoke them
+like this:
+
+    run1 -s -l mirror run1 mirror-updates
+    run1 -s -l mirror run1 mirror-dist
+    run1 -l mirror mirror-all
+
+Since mirror-updates and mirror-dist get a shared lock on "mirror", they'll
+keep mirror-all from running, but they'll run just fine individually.
+While mirror-all is running, neither mirror-updates or mirror-dist will
+run.
+
+Note that currently -w and -k are ignored when using shared locks.  (This
+may or may not change at some point in the future.)
 
 =back
 
