@@ -18,7 +18,7 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
-# $Id: run1,v 1.1 2001/06/06 17:33:25 steve Exp $
+# $Id: run1,v 1.2 2001/06/06 17:53:58 steve Exp $
 
 use strict;
 
@@ -29,12 +29,12 @@ use Fcntl qw(:flock);
 use POSIX;# qw(pause :sys_wait_h :errno_h);
 
 use vars qw(%opt $break $debug);
-use vars qw($warntime $lockdir $label $lockfile $lfh);
+use vars qw($warntime $killtime $lockdir $label $lockfile $lfh $count);
 
 sub debug(@);
 sub basename($);
 
-getopts('d:l:w:', \%opt);
+getopts('d:l:w:k:', \%opt);
 
 if (!@ARGV)
 {
@@ -56,6 +56,15 @@ else
     $warntime=86400; # One day.
 }
 
+if (defined($opt{'k'}))
+{
+    $killtime=$opt{'k'};
+}
+else
+{
+    $killtime=0; # Never
+}
+
 $lockdir=$opt{'d'} || (getpwuid($<))[7] . "/.locks";
 
 if (!-d $lockdir)
@@ -67,6 +76,8 @@ if (!-d $lockdir)
 
 $label=$opt{'l'} || basename($ARGV[0]);
 $lockfile="$lockdir/$label";
+
+$count=0;
 
 TRY: $lfh=new FileHandle $lockfile, O_CREAT|O_WRONLY|O_EXCL;
 
@@ -105,7 +116,25 @@ if (!defined($lfh))
 	    # Couldn't get the lock - process must be running.
 	    debug "pid $oldpid seems to be running.";
 	    my @buf=stat($lfh);
-	    if (time>$buf[9]+$warntime)
+	    if ($killtime && (time>$buf[9]+$killtime))
+	    {
+		if ($count>10)
+		{
+		    print STDERR "PID $oldpid won't die!  Giving up...\n";
+		    exit 1;
+		}
+		print STDERR "killing pid $oldpid...\n";
+		if (!kill(15, $oldpid))
+		{
+		    my $status=$!;
+		    die "Couldn't kill pid $oldpid: $status\n"
+		        if (-d "/proc/$oldpid");
+		}
+		sleep(2);
+		$count++;
+		goto TRY;
+	    }
+	    elsif ($warntime && (time>$buf[9]+$warntime))
 	    {
 		print STDERR "process $oldpid has been running too long ",
 			     "(since ", scalar(localtime($buf[9])), ")\n";
