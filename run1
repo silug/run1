@@ -18,7 +18,7 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
-# $Id: run1,v 1.8 2002/07/30 21:29:30 steve Exp $
+# $Id: run1,v 1.9 2002/09/12 15:34:26 steve Exp $
 
 use strict;
 
@@ -94,6 +94,7 @@ $SIG{'INT'}=\&interrupt;
 $SIG{'QUIT'}=\&interrupt;
 $SIG{'TERM'}=\&interrupt;
 $SIG{'CHLD'}=sub { $break=0; };
+$SIG{'ALRM'}='IGNORE';
 
 my $pid=fork;
 if ($pid==-1) {
@@ -103,7 +104,12 @@ if ($pid==-1) {
     die "exec() failed: $!\n";
 }
 
+# There's a race here.  The child can exit between
+# the kill() and pause(), and we'll wait forever.
+# As a dirty, but hopefully effective, hack, let's
+# arrange to receive a SIGALRM every 10 seconds.
 while (kill 0, $pid) {
+    alarm(10);
     POSIX::pause;
     kill($break, $pid) if ($break);
     waitpid($pid, &WNOHANG);
