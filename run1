@@ -1,0 +1,195 @@
+#!/usr/bin/perl -w
+#
+# run1 - Run a program once at a time
+#
+# LIMITATIONS - Please note that this script will only work reliably
+# when the lock directory is on a filesystem (and operating system)
+# where you can rely on open() with O_EXCL and flock() working properly.  
+# In other words, don't point the lock directory to a network filesystem
+# (especially NFS).  Use "-d /some/local/dir".
+#
+####
+#
+# Copyright (C) 2001 Steven Pritchard <steve@silug.org>
+# This program is free software; you can redistribute it
+# and/or modify it under the same terms as Perl itself.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# $Id: run1,v 1.1 2001/06/06 17:33:25 steve Exp $
+
+use strict;
+
+use Getopt::Std;
+use FileHandle;
+#use IO::Handle;
+use Fcntl qw(:flock);
+use POSIX;# qw(pause :sys_wait_h :errno_h);
+
+use vars qw(%opt $break $debug);
+use vars qw($warntime $lockdir $label $lockfile $lfh);
+
+sub debug(@);
+sub basename($);
+
+getopts('d:l:w:', \%opt);
+
+if (!@ARGV)
+{
+    print STDERR "usage: " . basename($0) . " <args> [ <arguments> ]\n";
+    exit 0;
+}
+
+$debug=0;
+$debug=1 if (defined($ENV{'DEBUG'}));
+
+$break=0;
+
+if (defined($opt{'w'}))
+{
+    $warntime=$opt{'w'};
+}
+else
+{
+    $warntime=86400; # One day.
+}
+
+$lockdir=$opt{'d'} || (getpwuid($<))[7] . "/.locks";
+
+if (!-d $lockdir)
+{
+    mkdir $lockdir, 0755;
+    my $status=$!;
+    die "Failed to create $lockdir: $status\n" if (!-d $lockdir);
+}
+
+$label=$opt{'l'} || basename($ARGV[0]);
+$lockfile="$lockdir/$label";
+
+TRY: $lfh=new FileHandle $lockfile, O_CREAT|O_WRONLY|O_EXCL;
+
+if (!defined($lfh))
+{
+    if ($!==EEXIST)
+    {
+	# Either a process is running, or there is a stale pid/lock file.
+	$lfh=new FileHandle $lockfile, O_RDWR;
+	if (!defined($lfh))
+	{
+	    if ($!==ENOENT)
+	    {
+		# The other process probably already exited.
+		goto TRY;
+	    }
+	    else
+	    {
+		die "Couldn't open lockfile $lockfile: $!\n";
+	    }
+	}
+
+	sleep 2; # Wait a bit before we try anything.
+
+	my $oldpid=<$lfh>;
+	chomp $oldpid;
+
+	if (flock($lfh, LOCK_EX|LOCK_NB))
+	{
+	    # Got the lock - pid/lock file is stale.
+	    print STDERR "Forcing stale lock from process $oldpid.\n";
+	    truncate($lfh, 0);
+	}
+	else
+	{
+	    # Couldn't get the lock - process must be running.
+	    debug "pid $oldpid seems to be running.";
+	    my @buf=stat($lfh);
+	    if (time>$buf[9]+$warntime)
+	    {
+		print STDERR "process $oldpid has been running too long ",
+			     "(since ", scalar(localtime($buf[9])), ")\n";
+	    }
+	    else
+	    {
+	        debug "pid $oldpid seems to have started ",
+		      scalar(localtime($buf[9]));
+	    }
+	    exit 0;
+	}
+    }
+    else
+    {
+	die "Couldn't create lockfile $lockfile: $!\n";
+    }
+}
+else
+{
+    flock($lfh, LOCK_EX|LOCK_NB) or die "Failed to lock $lockfile: $!\n";
+}
+
+print $lfh "$$\n";
+$lfh->flush;
+eval { $lfh->sync }; # This currently (5.6.0) only works on some platforms.
+debug "sync() failed on lockfile handle: $@" if ($@);
+
+$SIG{'HUP'}=\&interrupt;
+$SIG{'INT'}=\&interrupt;
+$SIG{'QUIT'}=\&interrupt;
+$SIG{'TERM'}=\&interrupt;
+$SIG{'CHLD'}=sub { $break=0; };
+
+my $pid=fork;
+if ($pid==-1)
+{
+    die "fork() failed: $!\n";
+}
+elsif ($pid==0)
+{
+    exec @ARGV;
+    die "exec() failed: $!\n";
+}
+
+while (-d "/proc/$pid")
+{
+    POSIX::pause;
+    kill($break, $pid) if ($break);
+    waitpid($pid, &WNOHANG);
+}
+
+unlink $lockfile or warn "Failed to unlink $lockfile: $!\n";
+
+sub debug(@)
+{
+    print STDERR @_, "\n" if ($debug);
+}
+
+sub interrupt
+{
+    ($break)=@_;
+}
+
+sub basename($)
+{
+    my ($arg)=@_;
+
+    my @parts=split '/', $arg;
+
+    return $parts[$#parts];
+}
+
+__END__
+
+=head1 NAME
+
+run1 - Run a program once at a time
+
+=head1 SYNOPSIS
+
+B<run1 C<program> [ C<arguments> ]>
+
+=head1 AUTHOR
+
+Steven Pritchard <F<steve@silug.org>>
+
+=cut
