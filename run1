@@ -18,13 +18,12 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
-# $Id: run1,v 1.4 2001/06/06 18:07:09 steve Exp $
+# $Id: run1,v 1.5 2001/06/07 03:55:08 steve Exp $
 
 use strict;
 
 use Getopt::Std;
 use FileHandle;
-#use IO::Handle;
 use Fcntl qw(:flock);
 use POSIX;# qw(pause :sys_wait_h :errno_h);
 
@@ -219,10 +218,59 @@ run1 - Run a program once at a time
 
 =head1 SYNOPSIS
 
-B<run1 C<program> [ C<arguments> ]>
+B<run1> [ C<-d> I<dir> ] [ C<-l> I<label> ] [ C<-w> I<sec> ] [ C<-k> I<sec> ]
+     I<program> [ I<args> ]
+
+=head1 DESCRIPTION
+
+This program is useful for keeping multiple copies of a program from
+running concurrently.
+
+=head1 OPTIONS
+
+=over 9
+
+=item C<-d> I<directory>
+
+Save lock/pid files in I<directory> instead of the default (~/.locks).
+
+=item C<-l> I<label>
+
+Use I<label> as the lock/pid file name.  The default is the name of the
+program being executed.
+
+=item C<-w> I<seconds>
+
+Print a warning to stderr if the process with the lock has been running
+for more than I<seconds> seconds.  The default is 86400 seconds, or one day.
+Specifying 0 seconds disables warning messages.
+
+=item C<-k> I<seconds>
+
+Kill the process with the lock if it has been running for more than I<seconds>
+seconds.  The default is 0, which disables this feature.
+
+=back
+
+=head1 NOTES
+
+Please note that this script will only work reliably when the lock
+directory is on a filesystem (and operating system) where you can rely on
+L<open(2)> with C<O_EXCL> and L<flock(2)> working properly.  In other
+words, don't point the lock directory to a network filesystem (especially
+NFS).  Use C<-d> I</some/local/dir>.
+
+=head1 SEE ALSO
+
+L<lockfile(1)>
+
+=head1 BUGS
+
+The limitations of the locking system (see L<NOTES|"NOTES"> above) could be
+construed as bugs.
 
 =head1 AUTHOR
 
-Steven Pritchard <F<steve@silug.org>>
+Steven Pritchard E<lt>F<steve@silug.org>E<gt>
 
 =cut
