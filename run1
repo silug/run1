@@ -18,7 +18,7 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
-# $Id: run1,v 1.6 2001/06/11 15:46:07 steve Exp $
+# $Id: run1,v 1.7 2002/07/23 13:48:28 steve Exp $
 
 use strict;
 
@@ -188,6 +188,8 @@ while (-d "/proc/$pid")
 }
 
 unlink $lockfile or warn "Failed to unlink $lockfile: $!\n";
+
+exit $?>>8;
 
 sub debug(@)
 {
