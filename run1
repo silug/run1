@@ -18,7 +18,7 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
-# $Id: run1,v 1.5 2001/06/07 03:55:08 steve Exp $
+# $Id: run1,v 1.6 2001/06/11 15:46:07 steve Exp $
 
 use strict;
 
@@ -74,7 +74,7 @@ if (!-d $lockdir)
 }
 
 $label=basename($opt{'l'}) || basename($ARGV[0]);
-$label=~s/\W//g;
+$label=~s/[^\w\.\-]//g;
 die "invalid label" if (!$label);
 $lockfile="$lockdir/$label";
 
