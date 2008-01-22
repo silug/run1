@@ -10,7 +10,7 @@
 #
 ####
 #
-# Copyright (C) 2001-2002 Steven Pritchard <steve@silug.org>
+# Copyright (C) 2001-2008 Steven Pritchard <steve@silug.org>
 # This program is free software; you can redistribute it
 # and/or modify it under the same terms as Perl itself.
 #
@@ -18,7 +18,7 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
-# $Id: run1,v 1.11 2008/01/22 21:40:37 steve Exp $
+# $Id: run1,v 1.12 2008/01/22 22:39:11 steve Exp $
 
 use strict;
 
@@ -31,46 +31,24 @@ sub debug(@);
 sub basename($);
 sub open_and_lock($$);
 
-our %opt;
-our $break;
-our $debug;
-our $warntime;
-our $killtime;
-our $lockdir;
-our $label;
-our $lockfile;
-our $lfh;
-our $count;
-our $shared;
+our %opt=();
 
-getopts('d:l:w:k:s', \%opt);
+getopts('d:l:w:k:sb', \%opt);
 
 if (!@ARGV) {
     print STDERR "usage: " . basename($0) . " <args> [ <arguments> ]\n";
     exit 0;
 }
 
-if (defined($ENV{'DEBUG'})) {
-    $debug=1;
-} else {
-    $debug=0;
-}
+our $debug=(defined($ENV{'DEBUG'}) ? $debug=1 : $debug=0);
 
-$break=0;
+our $break=0;
 
-if (defined($opt{'w'})) {
-    $warntime=$opt{'w'};
-} else {
-    $warntime=86400; # One day.
-}
+our $warntime=(defined($opt{'w'}) ? $opt{'w'} : 86400); # One day.
 
-if (defined($opt{'k'})) {
-    $killtime=$opt{'k'};
-} else {
-    $killtime=0; # Never
-}
+our $killtime=(defined($opt{'k'}) ? $opt{'k'} : $killtime=0); # Never
 
-$lockdir=$opt{'d'} || (getpwuid($<))[7] . "/.locks";
+our $lockdir=$opt{'d'} || (getpwuid($<))[7] . "/.locks";
 
 if (!-d $lockdir) {
     mkdir $lockdir, 0755;
@@ -78,20 +56,18 @@ if (!-d $lockdir) {
     die "Failed to create $lockdir: $status\n" if (!-d $lockdir);
 }
 
-if (defined($opt{'s'})) {
-    $shared=1;
-} else {
-    $shared=0;
-}
+our $shared=(defined($opt{'s'}) ? $opt{'s'} : 0);
 
-$label=basename($opt{'l'}) || basename($ARGV[0]);
+our $blocking=(defined($opt{'b'}) ? $opt{'b'} : 0);
+
+our $label=basename($opt{'l'}) || basename($ARGV[0]);
 $label=~s/[^\w\.\-]//g;
 die "invalid label" if (!$label);
-$lockfile="$lockdir/$label";
+our $lockfile="$lockdir/$label";
 
-$count=0;
+our $count=0;
 
-$lfh=open_and_lock($lockfile, $shared);
+our $lfh=open_and_lock($lockfile, $shared);
 
 print $lfh "$$\n";
 $lfh->flush;
@@ -127,7 +103,8 @@ while (kill 0, $pid) {
 if ($shared) {
     # Try to get an exclusive lock.  If we
     # can, it is safe to remove the lock file.
-    if (flock($lfh, LOCK_EX|LOCK_NB)) {
+    my $lock_mode=$blocking ? LOCK_EX : LOCK_EX|LOCK_NB;
+    if (flock($lfh, $lock_mode)) {
         unlink $lockfile or warn "Failed to unlink $lockfile: $!\n";
     } else {
         debug "Leaving active shared lock file $lockfile.\n",
@@ -191,8 +168,10 @@ sub open_and_lock($$)
 	        push(@oldpids, $_);
 	    }
 
+            my $lock_mode=$blocking ? LOCK_EX : LOCK_EX|LOCK_NB;
 	    if ($shared) {
-	        if (flock($lfh, LOCK_SH|LOCK_NB)) {
+                $lock_mode=$blocking ? LOCK_SH : LOCK_SH|LOCK_NB;
+	        if (flock($lfh, $lock_mode)) {
 		    # This sucks, because I'm not sure how we can figure
 		    # out how many processes we share the lock with, if any.
 		    debug "Got the lock, ",
@@ -203,11 +182,15 @@ sub open_and_lock($$)
 		} else {
 		    die "Couldn't get a shared lock on $lockfile: $!\n";
 		}
-	    } elsif (flock($lfh, LOCK_EX|LOCK_NB)) {
+	    } elsif (flock($lfh, $lock_mode)) {
 	        # Got the lock - pid/lock file is stale.
 	        print STDERR "Forcing stale lock",
 		    (@oldpids ? " from process(es) @oldpids" : ""), ".\n";
-	        truncate($lfh, 0);
+	        truncate($lfh, 0) || debug "Truncate failed: $!\n";
+                if ((stat $lfh)[3] == 0) {
+                    # Old lock file was deleted.
+		    return open_and_lock($lockfile, $shared);
+                }
 	    } else {
 	        # Couldn't get the lock - process must be running.
 		if (@oldpids) {
@@ -249,10 +232,12 @@ sub open_and_lock($$)
         }
     } else {
 	if ($shared) {
-            flock($lfh, LOCK_SH|LOCK_NB)
+            my $lock_mode=$blocking ? LOCK_SH : LOCK_SH|LOCK_NB;
+            flock($lfh, $lock_mode)
 	        or die "Failed to lock $lockfile: $!\n";
 	} else {
-            flock($lfh, LOCK_EX|LOCK_NB)
+            my $lock_mode=$blocking ? LOCK_EX : LOCK_SH|LOCK_NB;
+            flock($lfh, $lock_mode)
 	        or die "Failed to lock $lockfile: $!\n";
 	}
     }
@@ -322,6 +307,10 @@ run.
 Note that currently -w and -k are ignored when using shared locks.  (This
 may or may not change at some point in the future.)
 
+=item C<-b>
+
+Block (indefinitely) on the lock request.
+
 =back
 
 =head1 NOTES
@@ -346,3 +335,5 @@ construed as bugs.
 Steven Pritchard E<lt>F<steve@silug.org>E<gt>
 
 =cut
+
+# vi: set ai et:
