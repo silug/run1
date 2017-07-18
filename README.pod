@@ -1,0 +1,87 @@
+=head1 NAME
+
+run1 - Run a program once at a time
+
+=head1 SYNOPSIS
+
+B<run1> [ C<-d> I<dir> ] [ C<-l> I<label> ] [ C<-w> I<sec> ] [ C<-k> I<sec> ]
+     I<program> [ I<args> ]
+
+=head1 DESCRIPTION
+
+This program is useful for keeping multiple copies of a program from
+running concurrently.
+
+=head1 OPTIONS
+
+=over 9
+
+=item C<-d> I<directory>
+
+Save lock/pid files in I<directory> instead of the default (~/.locks).
+
+=item C<-l> I<label>
+
+Use I<label> as the lock/pid file name.  The default is the name of the
+program being executed.
+
+=item C<-w> I<seconds>
+
+Print a warning to stderr if the process with the lock has been running
+for more than I<seconds> seconds.  The default is 86400 seconds, or one day.
+Specifying 0 seconds disables warning messages.
+
+=item C<-k> I<seconds>
+
+Kill the process with the lock if it has been running for more than I<seconds>
+seconds.  The default is 0, which disables this feature.
+
+=item C<-s>
+
+Try to get a shared lock on the lock file.  This is useful for nesting
+calls to run1.  Say you have two scripts that can operate independently,
+and another script that does the equivalent of the first two, in addition
+to whatever other work it might do.  For example, a script that mirrors a
+linux distribution ftp site.  One syncs only updates, the second syncs only
+the distribution, and a third syncs the whole tree.  You might invoke them
+like this:
+
+    run1 -s -l mirror run1 mirror-updates
+    run1 -s -l mirror run1 mirror-dist
+    run1 -l mirror mirror-all
+
+Since mirror-updates and mirror-dist get a shared lock on "mirror", they'll
+keep mirror-all from running, but they'll run just fine individually.
+While mirror-all is running, neither mirror-updates or mirror-dist will
+run.
+
+Note that currently -w and -k are ignored when using shared locks.  (This
+may or may not change at some point in the future.)
+
+=item C<-b>
+
+Block (indefinitely) on the lock request.
+
+=back
+
+=head1 NOTES
+
+Please note that this script will only work reliably when the lock
+directory is on a filesystem (and operating system) where you can rely on
+L<open(2)> with C<O_EXCL> and L<flock(2)> working properly.  In other
+words, don't point the lock directory to a network filesystem (especially
+NFS).  Use C<-d> I</some/local/dir>.
+
+=head1 SEE ALSO
+
+L<lockfile(1)>
+
+=head1 BUGS
+
+The limitations of the locking system (see L<NOTES|"NOTES"> above) could be
+construed as bugs.
+
+=head1 AUTHOR
+
+Steven Pritchard E<lt>F<steve@silug.org>E<gt>
+
