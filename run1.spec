@@ -1,6 +1,6 @@
 Name:           run1
 Version:        1.12
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Run a program once at a time
 License:        GPL+ or Artistic
 URL:            https://github.com/silug/run1
@@ -42,6 +42,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man1/run1.1*
 
 %changelog
+* Wed Jul 31 2024 Steven Pritchard <steven.pritchard@gmail.com> 1.12-3
+- Rebuild
+
 * Sun Jul 31 2022 Steven Pritchard <steven.pritchard@gmail.com> 1.12-2
 - Rebuild
 
